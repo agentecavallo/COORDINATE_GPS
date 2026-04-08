@@ -12,15 +12,12 @@ def pulizia_chirurgica(testo):
     if not testo or pd.isna(testo): return ""
     t = str(testo).upper()
     
-    # 1. Gestione C/O (Presso) - Elimina il nome azienda sia se prima che dopo
-    # Se "VIA ROMA 1 C/O PINCO SRL" -> resta "VIA ROMA 1"
-    # Se "C/O PINCO SRL VIA ROMA 1" -> resta "VIA ROMA 1"
+    # 1. Gestione C/O (Presso)
     if "C/O" in t:
         parti = t.split("C/O")
-        # Cerchiamo quale parte contiene "VIA", "CORSO", "PIAZZA", ecc.
         t = parti[0] if any(x in parti[0] for x in ["VIA", "PIAZZA", "CORSO", "VIALE", "STRADA"]) else parti[-1]
 
-    # 2. Rimuove tutto ciò che è tra parentesi (es. nomi province o note)
+    # 2. Rimuove tutto ciò che è tra parentesi
     t = re.sub(r'\(.*?\)', '', t)
     
     # 3. Pulizia sigle fastidiose
@@ -47,8 +44,9 @@ if uploaded_file := st.file_uploader("Carica il file Excel", type=['xlsx']):
     col = st.selectbox("Seleziona la colonna Indirizzo:", df.columns.tolist())
 
     if st.button("Avvia Geocodifica Totale"):
-        geolocator = Nominatim(user_agent="michele_base_protection_v4")
-        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2, timeout=10)
+        # ERRORE CORRETTO QUI: Il timeout va dentro Nominatim
+        geolocator = Nominatim(user_agent="michele_base_protection_v4", timeout=10)
+        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2)
 
         progresso = st.progress(0)
         num_righe = len(df)
@@ -65,9 +63,7 @@ if uploaded_file := st.file_uploader("Carica il file Excel", type=['xlsx']):
 
             # 2. Se fallisce, prova a togliere il numero civico (cerca solo la via)
             if not location:
-                # Prende tutto tranne i numeri finali
                 via_solo = re.sub(r'\d+', '', addr_clean).strip()
-                # Prende l'ultima parola (che di solito è la città)
                 citta_solo = addr_clean.split()[-1]
                 location = geocode(f"{via_solo} {citta_solo}, Italy")
 
