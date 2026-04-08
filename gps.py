@@ -1,47 +1,34 @@
 import pandas as pd
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
-import time
 
-def geocodifica_lista(file_input, file_output):
-    # 1. Carichiamo il file Excel
+def geocodifica_colonna_unica(file_input, nome_colonna, file_output):
+    # Carichiamo l'Excel
     df = pd.read_excel(file_input)
     
     # Inizializziamo il geolocalizzatore
-    geolocator = Nominatim(user_agent="michele_batch_geocoder")
+    geolocator = Nominatim(user_agent="michele_geocoder_pro")
     
-    # 2. RateLimiter serve per non essere bloccati dal server:
-    # aggiunge automaticamente un ritardo di 1 secondo tra una richiesta e l'altra
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+    # Aggiungiamo il ritardo per non essere bloccati (1.5 secondi per stare sicuri con 500 record)
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.5, error_wait_seconds=5.0)
 
-    print(f"Inizio elaborazione di {len(df)} indirizzi...")
+    print(f"Elaborazione di {len(df)} indirizzi in corso...")
 
-    # 3. Creiamo la stringa dell'indirizzo completo unendo le colonne
-    # Modifica i nomi tra parentesi quadre se le tue colonne si chiamano diversamente
-    df['indirizzo_full'] = (df['Indirizzo'].astype(str) + " " + 
-                            df['Civico'].astype(str) + ", " + 
-                            df['CAP'].astype(str) + " " + 
-                            df['Citta'].astype(str) + " (" + 
-                            df['Provincia'].astype(str) + "), Italy")
+    # Applichiamo la ricerca direttamente sulla colonna esistente
+    # Aggiungiamo ", Italy" alla fine per aiutare il sistema se non è specificato
+    df['temp_location'] = df[nome_colonna].apply(lambda x: geocode(str(x) + ", Italy") if pd.notnull(x) else None)
 
-    # 4. Applichiamo la geocodifica
-    # Questa riga crea una colonna 'location' con tutti i dati restituiti
-    df['location'] = df['indirizzo_full'].apply(geocode)
+    # Estraiamo i dati
+    df['Latitudine'] = df['temp_location'].apply(lambda loc: loc.latitude if loc else None)
+    df['Longitudine'] = df['temp_location'].apply(lambda loc: loc.longitude if loc else None)
 
-    # 5. Estraiamo Latitudine e Longitudine dalla colonna 'location'
-    df['Latitudine'] = df['location'].apply(lambda loc: loc.latitude if loc else None)
-    df['Longitudine'] = df['location'].apply(lambda loc: loc.longitude if loc else None)
+    # Pulizia: rimuoviamo la colonna temporanea
+    df.drop(columns=['temp_location'], inplace=True)
 
-    # Rimuoviamo la colonna di supporto 'location' per pulizia
-    df.drop(columns=['location', 'indirizzo_full'], inplace=True)
-
-    # 6. Salviamo il risultato in un nuovo file Excel
+    # Salvataggio
     df.to_excel(file_output, index=False)
-    print(f"Elaborazione completata! File salvato come: {file_output}")
+    print(f"Fatto! Risultati salvati in: {file_output}")
 
 if __name__ == "__main__":
-    # Assicurati che il file 'clienti.xlsx' sia nella stessa cartella del programma
-    try:
-        geocodifica_lista("clienti.xlsx", "clienti_coordinati.xlsx")
-    except Exception as e:
-        print(f"Errore: {e}")
+    # CAMBIA "Indirizzo Completo" con il nome esatto della tua colonna nell'Excel
+    geocodifica_colonna_unica("clienti.xlsx", "Indirizzo Completo", "risultati_gps.xlsx")
