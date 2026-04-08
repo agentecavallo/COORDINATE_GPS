@@ -6,69 +6,81 @@ from io import BytesIO
 import re
 
 st.set_page_config(page_title="Geocodificatore Michele", layout="centered")
-st.title("🌍 Geocodificatore Base Protection - Master Fix")
+st.title("🌍 Geocodificatore Base Protection - Versione Ultra")
 
-def pulizia_totale(testo):
-    if not testo: return ""
+def pulizia_chirurgica(testo):
+    if not testo or pd.isna(testo): return ""
     t = str(testo).upper()
     
-    # 1. Gestione C/O: prendiamo solo quello che c'è DOPO il C/O
+    # 1. Gestione C/O (Presso) - Elimina il nome azienda sia se prima che dopo
+    # Se "VIA ROMA 1 C/O PINCO SRL" -> resta "VIA ROMA 1"
+    # Se "C/O PINCO SRL VIA ROMA 1" -> resta "VIA ROMA 1"
     if "C/O" in t:
-        t = t.split("C/O")[-1]
+        parti = t.split("C/O")
+        # Cerchiamo quale parte contiene "VIA", "CORSO", "PIAZZA", ecc.
+        t = parti[0] if any(x in parti[0] for x in ["VIA", "PIAZZA", "CORSO", "VIALE", "STRADA"]) else parti[-1]
+
+    # 2. Rimuove tutto ciò che è tra parentesi (es. nomi province o note)
+    t = re.sub(r'\(.*?\)', '', t)
     
-    # 2. Semplificazione Numeri Civici: trasforma "10/A" o "10/12" in "10"
-    # Aiuta tantissimo a trovare la strada se il civico esatto non è mappato
-    t = re.sub(r'(\d+)/[A-Z0-9/]+', r'\1', t)
-    
-    # 3. Rimozione parole inutili per il GPS
-    parole_da_eliminare = [
-        "VIA LOC.", "LOC.", "LOCALITÀ", "LOCALITA'", "SNC", 
-        "P.I.P.", "Z.I.", "NR.", " N. ", "ACCESSO CIVICO", "ZONA INDUSTRIALE"
+    # 3. Pulizia sigle fastidiose
+    disturbatori = [
+        "VIA LOC.", "LOC.", "LOCALITÀ", "LOCALITA'", "SNC", "P.I.P.", "Z.I.", 
+        "NR.", " N.", "ACCESSO CIVICO", "ZONA INDUSTRIALE", "KM", "STRADA STATALE"
     ]
-    for p in parole_da_eliminare:
+    for p in disturbatori:
         t = t.replace(p, " ")
 
-    # 4. Espansione abbreviazioni
-    t = t.replace("F.LLI", "FRATELLI")
-    t = t.replace("C.DA", "CONTRADA")
-    t = t.replace("P.ZZA", "PIAZZA")
-    t = t.replace("V.LE", "VIALE")
-    t = t.replace("C.SO", "CORSO")
-    t = t.replace("C.", " ") # Rimuove iniziali puntate come C. Beschi
+    # 4. Semplificazione drastica del civico (es. 8/10 o 863/A diventano 8 o 863)
+    t = re.sub(r'(\d+)/[A-Z0-9/]+', r'\1', t)
     
-    # 5. Pulizia finale punteggiatura e spazi
-    t = t.replace(",", " ").replace(".", " ")
+    # 5. Espansione e pulizia finale
+    t = t.replace("F.LLI", "FRATELLI").replace("C.DA", "CONTRADA").replace("P.ZZA", "PIAZZA")
+    t = t.replace("V.LE", "VIALE").replace("C.SO", "CORSO").replace("C.", " ")
+    
+    # Rimuove punteggiatura e spazi doppi
+    t = re.sub(r'[.,]', ' ', t)
     return " ".join(t.split())
 
-uploaded_file = st.file_uploader("Carica il file Excel con i clienti", type=['xlsx'])
+if uploaded_file := st.file_uploader("Carica il file Excel", type=['xlsx']):
+    df = pd.read_excel(uploaded_file, dtype=str)
+    col = st.selectbox("Seleziona la colonna Indirizzo:", df.columns.tolist())
 
-if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file, dtype=str) 
-    colonna_selezionata = st.selectbox("Seleziona la colonna Indirizzo:", df.columns.tolist())
-
-    if st.button("Avvia Geocodifica"):
-        geolocator = Nominatim(user_agent="michele_base_ultimate")
-        # Aumentiamo il timeout per indirizzi complessi
-        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2, error_wait_seconds=5.0)
+    if st.button("Avvia Geocodifica Totale"):
+        geolocator = Nominatim(user_agent="michele_base_protection_v4")
+        geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1.2, timeout=10)
 
         progresso = st.progress(0)
         num_righe = len(df)
         risultati = []
 
         for i, row in df.iterrows():
-            addr_orig = str(row[colonna_selezionata])
-            
-            # TENTATIVO 1: Indirizzo pulito "Master"
-            addr_clean = pulizia_totale(addr_orig)
+            addr_orig = str(row[col])
+            addr_clean = pulizia_chirurgica(addr_orig)
+            location = None
+
+            # --- STRATEGIA A 4 LIVELLI ---
+            # 1. Prova l'indirizzo pulito completo
             location = geocode(f"{addr_clean}, Italy")
 
-            # TENTATIVO 2 (Fallback): Se fallisce, proviamo solo Via + Città (senza civico)
+            # 2. Se fallisce, prova a togliere il numero civico (cerca solo la via)
+            if not location:
+                # Prende tutto tranne i numeri finali
+                via_solo = re.sub(r'\d+', '', addr_clean).strip()
+                # Prende l'ultima parola (che di solito è la città)
+                citta_solo = addr_clean.split()[-1]
+                location = geocode(f"{via_solo} {citta_solo}, Italy")
+
+            # 3. Se fallisce, prova solo "Nome Via + Città"
             if not location:
                 parti = addr_clean.split()
-                if len(parti) > 3:
-                    # Prende la via (primi due elementi) e la città (ultimo elemento)
-                    tentativo_corto = f"{parti[0]} {parti[1]} {parti[-1]}, Italy"
-                    location = geocode(tentativo_corto)
+                if len(parti) >= 2:
+                    location = geocode(f"{parti[0]} {parti[1]} {parti[-1]}, Italy")
+
+            # 4. Ultima spiaggia: Cerca solo la Città (per non avere il buco nel file)
+            if not location:
+                citta_fallback = addr_clean.split()[-1]
+                location = geocode(f"{citta_fallback}, Italy")
 
             if location:
                 risultati.append({
@@ -80,13 +92,11 @@ if uploaded_file is not None:
             
             progresso.progress((i + 1) / num_righe)
 
-        df['Latitudine'] = [r['Latitudine'] for r in risultati]
-        df['Longitudine'] = [r['Longitudine'] for r in risultati]
-
-        st.success("✅ Finito! Ora molti più indirizzi dovrebbero essere mappati.")
+        df['Latitudine'], df['Longitudine'] = [r['Latitudine'] for r in risultati], [r['Longitudine'] for r in risultati]
+        
+        st.success("✅ Finito! Ora abbiamo usato anche il fallback sulla città se la via era impossibile.")
         
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False)
-        
-        st.download_button(label="📥 Scarica Excel per Mappa", data=output.getvalue(), file_name="clienti_base_gps.xlsx")
+        st.download_button(label="📥 Scarica Risultati", data=output.getvalue(), file_name="mappa_clienti_base_v4.xlsx")
